@@ -1,0 +1,30 @@
+{
+  "name": "homeassistant-meals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local meal planner and recipe viewer for Home Assistant",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:web": "vite --host 127.0.0.1 --port 3211",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 3211",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.4",
+    "concurrently": "^9.2.1",
+    "vite": "^7.3.1"
+  }
+}
