@@ -5,19 +5,15 @@ WORKDIR /app
 
 RUN apk add --no-cache nodejs npm
 
-COPY package.json package-lock.json ./
-RUN npm install
+COPY app/package.json ./package.json
+RUN npm install --omit=dev
 
-COPY server ./server
-COPY web ./web
-COPY vite.config.js ./
-
-RUN npm run build
-RUN npm prune --omit=dev
+COPY app/server ./server
+COPY app/web ./web
 
 RUN mkdir -p /data/meal-atlas
 
-COPY addon/run.sh /run.sh
+COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
 CMD [ "/run.sh" ]
