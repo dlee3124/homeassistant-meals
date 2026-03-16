@@ -2,7 +2,7 @@ name: "Meal Atlas"
 version: "0.1.0"
 slug: "meal_atlas"
 description: "Local meal planner and recipe viewer for Home Assistant"
-url: "https://local"
+url: "https://github.com/dlee3124/homeassistant-meals"
 arch:
   - aarch64
   - amd64
