@@ -4,7 +4,7 @@
 
 - Runs the meal planner as a local Home Assistant add-on
 - Stores data on the Home Assistant box
-- Exposes the app on port `3210`
+- Exposes the app through Home Assistant ingress
 - Supports recipe import, recipe browsing, and weekly planning
 
 ## Install on HAOS
@@ -13,23 +13,7 @@
 2. In Home Assistant, add this repository as a local add-on repository.
 3. Build and install the `Meal Atlas` add-on.
 4. Start the add-on.
-5. Open `http://homeassistant.local:3210` on your local network.
-
-## Embed in Home Assistant
-
-For the first version, the simplest approach is to embed the local app as an iframe panel.
-
-Add this to your Home Assistant `configuration.yaml`:
-
-```yaml
-panel_iframe:
-  meal_atlas:
-    title: Meal Atlas
-    icon: mdi:silverware-fork-knife
-    url: http://homeassistant.local:3210
-```
-
-Then restart Home Assistant.
+5. Click `OPEN WEB UI` from the add-on page, or use the `Meal Atlas` sidebar entry in Home Assistant.
 
 ## Data location
 

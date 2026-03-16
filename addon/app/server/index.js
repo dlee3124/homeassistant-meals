@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,12 +18,27 @@ import { getWeekStartMonday, isIsoDate } from "./week.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.resolve(__dirname, "../web/dist");
+const indexHtmlTemplate = fs.readFileSync(path.join(publicDir, "index.html"), "utf8");
 
 const app = express();
 const port = Number(process.env.PORT || 3210);
 const host = process.env.HOST || "127.0.0.1";
+const ingressEnabled = process.env.HA_ADDON_INGRESS === "true";
+const ingressProxyIp = process.env.HA_INGRESS_PROXY_IP || "172.30.32.2";
 
 app.use(express.json({ limit: "1mb" }));
+
+if (ingressEnabled) {
+  app.use((request, response, next) => {
+    if (normalizeRemoteAddress(request.socket.remoteAddress) !== ingressProxyIp) {
+      response.status(403).json({ error: "Ingress only." });
+      return;
+    }
+
+    next();
+  });
+}
+
 app.use(express.static(publicDir));
 
 app.get("/api/recipes", async (_request, response) => {
@@ -131,10 +147,62 @@ app.put("/api/plans/:weekStart", async (request, response) => {
   response.json({ plan });
 });
 
-app.get("*", (_request, response) => {
-  response.sendFile(path.join(publicDir, "index.html"));
+app.get("*", (request, response) => {
+  response.type("html").send(renderIndexHtml(resolveBasePath(request)));
 });
 
 app.listen(port, host, () => {
   console.log(`Meal planner running on http://${host}:${port}`);
 });
+
+function normalizeRemoteAddress(address) {
+  return String(address || "").replace(/^::ffff:/, "");
+}
+
+function resolveBasePath(request) {
+  const ingressPath = request.get("X-Ingress-Path");
+
+  return normalizeBasePath(ingressPath || "/");
+}
+
+function normalizeBasePath(value) {
+  const rawValue = String(value || "/").trim();
+
+  if (!rawValue || rawValue === "/") {
+    return "/";
+  }
+
+  let pathname = rawValue;
+
+  try {
+    if (pathname.startsWith("http://") || pathname.startsWith("https://")) {
+      pathname = new URL(pathname).pathname;
+    }
+  } catch {
+    pathname = rawValue;
+  }
+
+  const normalized = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+}
+
+function renderIndexHtml(basePath) {
+  const headInjection = [
+    `<base href="${escapeHtmlAttribute(toBaseHref(basePath))}">`,
+    `<script>window.__MEAL_ATLAS_BASENAME__=${JSON.stringify(basePath)};</script>`,
+  ].join("\n    ");
+
+  return indexHtmlTemplate.replace("</head>", `    ${headInjection}\n  </head>`);
+}
+
+function toBaseHref(basePath) {
+  return basePath === "/" ? "/" : `${basePath}/`;
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}

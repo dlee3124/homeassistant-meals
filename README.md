@@ -9,7 +9,7 @@ Meal Atlas is a locally hosted meal planner and recipe viewer designed to run al
 - Browse a growing household recipe library
 - Plan Monday-based calendar weeks
 - Generate a combined shopping list
-- Run locally on Home Assistant OS through an add-on
+- Run locally on Home Assistant OS through an ingress-enabled add-on
 
 ## Project structure
 

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+const appBasePath = getAppBasePath();
+
 const mealSlotLabels = {
   breakfast: "Breakfast",
   snackAm: "AM Snack",
@@ -38,7 +40,7 @@ const emptyDraft = {
 };
 
 export default function App() {
-  const [route, setRoute] = useState(parseRoute(window.location.pathname));
+  const [route, setRoute] = useState(parseRoute(getCurrentAppPath()));
   const [recipes, setRecipes] = useState([]);
   const [selectedRecipeId, setSelectedRecipeId] = useState(null);
   const [recipeSearch, setRecipeSearch] = useState("");
@@ -56,7 +58,7 @@ export default function App() {
   const currentWeekStartRef = useRef(currentWeekStart);
 
   useEffect(() => {
-    const onPopState = () => setRoute(parseRoute(window.location.pathname));
+    const onPopState = () => setRoute(parseRoute(getCurrentAppPath()));
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -157,9 +159,10 @@ export default function App() {
 
   async function navigateTo(path, options = {}) {
     const nextPath = normalizeRoutePath(path);
+    const browserPath = withAppBasePath(nextPath);
 
-    if (!options.replace && window.location.pathname !== nextPath) {
-      window.history.pushState({}, "", nextPath);
+    if (!options.replace && window.location.pathname !== browserPath) {
+      window.history.pushState({}, "", browserPath);
     }
 
     setRoute(parseRoute(nextPath));
@@ -1416,7 +1419,7 @@ function Toast({ notice }) {
 }
 
 async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+  const response = await fetch(resolveAppUrl(url), options);
   const contentType = response.headers.get("content-type") || "";
   const rawBody = await response.text();
   let payload = null;
@@ -1523,6 +1526,63 @@ function parseRoute(pathname) {
 function normalizeRoutePath(pathname) {
   const value = pathname || "/";
   return value.length > 1 && value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function getAppBasePath() {
+  const configuredBasePath =
+    typeof window !== "undefined" && typeof window.__MEAL_ATLAS_BASENAME__ === "string" ? window.__MEAL_ATLAS_BASENAME__ : "/";
+
+  return normalizeBasePath(configuredBasePath);
+}
+
+function getCurrentAppPath() {
+  return stripBasePath(window.location.pathname);
+}
+
+function resolveAppUrl(url) {
+  if (/^[a-z]+:/i.test(url)) {
+    return url;
+  }
+
+  return withAppBasePath(url.startsWith("/") ? url : `/${url}`);
+}
+
+function withAppBasePath(pathname) {
+  const normalizedPath = normalizeRoutePath(pathname);
+
+  if (appBasePath === "/") {
+    return normalizedPath;
+  }
+
+  return normalizedPath === "/" ? appBasePath : `${appBasePath}${normalizedPath}`;
+}
+
+function stripBasePath(pathname) {
+  const normalizedPath = normalizeRoutePath(pathname);
+
+  if (appBasePath === "/") {
+    return normalizedPath;
+  }
+
+  if (normalizedPath === appBasePath) {
+    return "/";
+  }
+
+  if (normalizedPath.startsWith(`${appBasePath}/`)) {
+    return normalizeRoutePath(normalizedPath.slice(appBasePath.length));
+  }
+
+  return normalizedPath;
+}
+
+function normalizeBasePath(pathname) {
+  const normalizedPath = normalizeRoutePath(pathname || "/");
+
+  if (normalizedPath === "" || normalizedPath === "/") {
+    return "/";
+  }
+
+  return normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
 }
 
 function listWeekDates(weekStart) {
