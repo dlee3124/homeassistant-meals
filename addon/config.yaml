@@ -1,5 +1,5 @@
 name: "Meal Atlas"
-version: "0.1.1"
+version: "0.1.2"
 slug: "meal_atlas"
 description: "Local meal planner and recipe viewer for Home Assistant"
 url: "https://github.com/dlee3124/homeassistant-meals"
