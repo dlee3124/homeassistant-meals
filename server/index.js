@@ -23,21 +23,8 @@ const indexHtmlTemplate = fs.readFileSync(path.join(publicDir, "index.html"), "u
 const app = express();
 const port = Number(process.env.PORT || 3210);
 const host = process.env.HOST || "127.0.0.1";
-const ingressEnabled = process.env.HA_ADDON_INGRESS === "true";
-const ingressProxyIp = process.env.HA_INGRESS_PROXY_IP || "172.30.32.2";
 
 app.use(express.json({ limit: "1mb" }));
-
-if (ingressEnabled) {
-  app.use((request, response, next) => {
-    if (normalizeRemoteAddress(request.socket.remoteAddress) !== ingressProxyIp) {
-      response.status(403).json({ error: "Ingress only." });
-      return;
-    }
-
-    next();
-  });
-}
 
 app.use(express.static(publicDir));
 
@@ -154,10 +141,6 @@ app.get("*", (request, response) => {
 app.listen(port, host, () => {
   console.log(`Meal planner running on http://${host}:${port}`);
 });
-
-function normalizeRemoteAddress(address) {
-  return String(address || "").replace(/^::ffff:/, "");
-}
 
 function resolveBasePath(request) {
   const ingressPath = request.get("X-Ingress-Path");
