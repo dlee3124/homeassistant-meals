@@ -13,6 +13,7 @@ const recipesPath = path.join(dataDir, "recipes.json");
 const mealPlansPath = path.join(dataDir, "meal-plans.json");
 const recipesStore = createJsonFileStore(recipesPath, []);
 const mealPlansStore = createJsonFileStore(mealPlansPath, {});
+const mealSlots = ["breakfast", "snackAm", "lunch", "snackPm", "dinner", "dessert"];
 
 export async function listRecipes() {
   const recipes = await recipesStore.read();
@@ -50,20 +51,12 @@ export async function updateRecipe(recipeId, recipeUpdate) {
 }
 
 export async function getPlanForWeek(weekStart) {
-  const plans = await mealPlansStore.read();
-
-  if (plans[weekStart]) {
-    return plans[weekStart];
-  }
-
   let plan = null;
 
   await mealPlansStore.update((draftPlans) => {
-    if (!draftPlans[weekStart]) {
-      draftPlans[weekStart] = createEmptyPlan(weekStart);
-    }
-
-    plan = draftPlans[weekStart];
+    const nextPlan = normalizePlan(draftPlans[weekStart], weekStart);
+    draftPlans[weekStart] = nextPlan;
+    plan = nextPlan;
     return draftPlans;
   });
 
@@ -74,7 +67,7 @@ export async function updatePlanForWeek(weekStart, planUpdate) {
   let updatedPlan = null;
 
   await mealPlansStore.update((plans) => {
-    plans[weekStart] = planUpdate;
+    plans[weekStart] = normalizePlan(planUpdate, weekStart);
     updatedPlan = plans[weekStart];
     return plans;
   });
@@ -138,23 +131,55 @@ export function parseRecipeText(text) {
 
 function createEmptyPlan(weekStart = getCurrentWeekStart()) {
   const days = Object.fromEntries(
-    listWeekDates(weekStart).map(({ key }) => [
-      key,
-      {
-        breakfast: null,
-        snackAm: null,
-        lunch: null,
-        snackPm: null,
-        dinner: null,
-        dessert: null,
-      },
-    ]),
+    listWeekDates(weekStart).map(({ key }) => [key, createEmptyDayPlan()]),
   );
 
   return {
     weekStart,
     days,
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function createEmptyDayPlan() {
+  return Object.fromEntries(mealSlots.map((slot) => [slot, createEmptyMealSlot()]));
+}
+
+function createEmptyMealSlot() {
+  return {
+    recipeId: null,
+    required: true,
+  };
+}
+
+function normalizePlan(plan, weekStart = getCurrentWeekStart()) {
+  const normalizedWeekStart = weekStart || plan?.weekStart || getCurrentWeekStart();
+  const days = Object.fromEntries(
+    listWeekDates(normalizedWeekStart).map(({ key }) => [key, normalizeDayPlan(plan?.days?.[key])]),
+  );
+
+  return {
+    weekStart: normalizedWeekStart,
+    days,
+    updatedAt: plan?.updatedAt || new Date().toISOString(),
+  };
+}
+
+function normalizeDayPlan(dayPlan) {
+  return Object.fromEntries(mealSlots.map((slot) => [slot, normalizeMealSlot(dayPlan?.[slot])]));
+}
+
+function normalizeMealSlot(slotValue) {
+  if (slotValue && typeof slotValue === "object" && !Array.isArray(slotValue)) {
+    return {
+      recipeId: typeof slotValue.recipeId === "string" ? slotValue.recipeId : null,
+      required: slotValue.required !== false,
+    };
+  }
+
+  return {
+    recipeId: typeof slotValue === "string" ? slotValue : null,
+    required: true,
   };
 }
 

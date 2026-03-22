@@ -64,8 +64,8 @@ test("getShoppingListForWeek combines ingredients from planned recipes", async (
     await store.createRecipe(createRecipe("recipe-2", "Soup", ["1 onion", "2 tbsp olive oil"]));
 
     const plan = await store.getPlanForWeek(weekStart);
-    plan.days["2026-03-16"].dinner = "recipe-1";
-    plan.days["2026-03-17"].dinner = "recipe-2";
+    plan.days["2026-03-16"].dinner.recipeId = "recipe-1";
+    plan.days["2026-03-17"].dinner.recipeId = "recipe-2";
     plan.updatedAt = new Date().toISOString();
     await store.updatePlanForWeek(weekStart, plan);
 
@@ -79,6 +79,58 @@ test("getShoppingListForWeek combines ingredients from planned recipes", async (
     const oil = shoppingList.items.find((item) => item.name === "olive oil");
     assert.ok(oil);
     assert.equal(oil.quantityLabel, "3 tbsp");
+  } finally {
+    delete process.env.MEALS_DATA_DIR;
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("getPlanForWeek migrates legacy string slots to structured slot objects", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "meal-atlas-plan-migration-"));
+  const weekStart = "2026-03-16";
+  const legacyPlan = {
+    weekStart,
+    days: {
+      "2026-03-16": {
+        breakfast: null,
+        snackAm: null,
+        lunch: "recipe-legacy",
+        snackPm: null,
+        dinner: null,
+        dessert: null,
+      },
+    },
+    updatedAt: "2026-03-22T00:00:00.000Z",
+  };
+  await fs.writeFile(path.join(dataDir, "meal-plans.json"), `${JSON.stringify({ [weekStart]: legacyPlan }, null, 2)}\n`);
+  const store = await importStoreModule(dataDir);
+
+  try {
+    const plan = await store.getPlanForWeek(weekStart);
+    assert.deepEqual(plan.days["2026-03-16"].lunch, { recipeId: "recipe-legacy", required: true });
+    assert.deepEqual(plan.days["2026-03-16"].dinner, { recipeId: null, required: true });
+  } finally {
+    delete process.env.MEALS_DATA_DIR;
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("getShoppingListForWeek ignores slots marked as not required", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "meal-atlas-optional-slot-"));
+  const store = await importStoreModule(dataDir);
+  const weekStart = "2026-03-16";
+
+  try {
+    await store.createRecipe(createRecipe("recipe-1", "Pasta", ["2 onions"]));
+
+    const plan = await store.getPlanForWeek(weekStart);
+    plan.days["2026-03-16"].dinner = { recipeId: "recipe-1", required: false };
+    plan.updatedAt = new Date().toISOString();
+    await store.updatePlanForWeek(weekStart, plan);
+
+    const shoppingList = await store.getShoppingListForWeek(weekStart);
+    assert.deepEqual(shoppingList.recipeTitles, []);
+    assert.deepEqual(shoppingList.items, []);
   } finally {
     delete process.env.MEALS_DATA_DIR;
     await fs.rm(dataDir, { recursive: true, force: true });

@@ -174,12 +174,15 @@ function normalizeBasePath(value) {
 }
 
 function renderIndexHtml(basePath) {
+  const baseHref = escapeHtmlAttribute(toBaseHref(basePath));
   const headInjection = [
-    `<base href="${escapeHtmlAttribute(toBaseHref(basePath))}">`,
+    `<base href="${baseHref}">`,
     `<script>window.__MEAL_ATLAS_BASENAME__=${JSON.stringify(basePath)};</script>`,
   ].join("\n    ");
 
-  return indexHtmlTemplate.replace("</head>", `    ${headInjection}\n  </head>`);
+  return indexHtmlTemplate
+    .replace(/(<head>)/i, `$1\n    ${headInjection}`)
+    .replace(/(["'])\.\/assets\//g, `$1${baseHref}assets/`);
 }
 
 function toBaseHref(basePath) {
