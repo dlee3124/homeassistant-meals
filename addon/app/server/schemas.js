@@ -26,12 +26,42 @@ export const recipeSchema = z.object({
 });
 
 const dayPlanSchema = z.object({
-  breakfast: z.string().nullable().default(null),
-  snackAm: z.string().nullable().default(null),
-  lunch: z.string().nullable().default(null),
-  snackPm: z.string().nullable().default(null),
-  dinner: z.string().nullable().default(null),
-  dessert: z.string().nullable().default(null),
+  breakfast: z
+    .object({
+      recipeId: z.string().nullable().default(null),
+      required: z.boolean().default(true),
+    })
+    .default({ recipeId: null, required: true }),
+  snackAm: z
+    .object({
+      recipeId: z.string().nullable().default(null),
+      required: z.boolean().default(true),
+    })
+    .default({ recipeId: null, required: true }),
+  lunch: z
+    .object({
+      recipeId: z.string().nullable().default(null),
+      required: z.boolean().default(true),
+    })
+    .default({ recipeId: null, required: true }),
+  snackPm: z
+    .object({
+      recipeId: z.string().nullable().default(null),
+      required: z.boolean().default(true),
+    })
+    .default({ recipeId: null, required: true }),
+  dinner: z
+    .object({
+      recipeId: z.string().nullable().default(null),
+      required: z.boolean().default(true),
+    })
+    .default({ recipeId: null, required: true }),
+  dessert: z
+    .object({
+      recipeId: z.string().nullable().default(null),
+      required: z.boolean().default(true),
+    })
+    .default({ recipeId: null, required: true }),
 });
 
 export const mealPlanSchema = z.object({

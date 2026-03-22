@@ -10,16 +10,14 @@ const mealSlotLabels = {
   dinner: "Dinner",
   dessert: "Dessert",
 };
+const mealSlotKeys = Object.keys(mealSlotLabels);
 
 const mealTypeOptions = ["breakfast", "snack", "lunch", "dinner", "dessert"];
 
-const navItems = [
-  { key: "today", path: "/today", label: "Today", eyebrow: "Planned meals" },
-  { key: "weeklyView", path: "/", label: "Overview", eyebrow: "This week" },
-  { key: "planner", path: "/planner", label: "Plan", eyebrow: "Meal slots" },
-  { key: "library", path: "/library", label: "Library", eyebrow: "Recipe browser" },
-  { key: "shoppingList", path: "/shopping-list", label: "Shopping", eyebrow: "Combined list" },
-  { key: "importer", path: "/import", label: "Import", eyebrow: "Add recipes" },
+const primaryNavItems = [
+  { key: "plan", path: "/", label: "Plan", note: "Weekly board" },
+  { key: "cook", path: "/cook", label: "Cook", note: "Today and next" },
+  { key: "shop", path: "/shop", label: "Shop", note: "Weekly list" },
 ];
 
 const emptyDraft = {
@@ -136,7 +134,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (route.name !== "shoppingList") {
+    if (route.name !== "shop") {
       return;
     }
 
@@ -152,7 +150,6 @@ export default function App() {
   );
   const weekDays = useMemo(() => listWeekDates(currentWeekStart), [currentWeekStart]);
   const plannedMealCount = countPlannedMeals(plan);
-  const weekProgress = Math.round((plannedMealCount / (weekDays.length * Object.keys(mealSlotLabels).length || 1)) * 100);
   const fallbackShoppingList = useMemo(() => buildFallbackShoppingList(plan, recipeIndex), [plan, recipeIndex]);
   const effectiveShoppingList =
     shoppingList?.recipeTitles?.length || shoppingList?.items?.length || !plannedMealCount ? shoppingList : fallbackShoppingList;
@@ -248,7 +245,7 @@ export default function App() {
 
       await Promise.all([refreshRecipes(payload.recipe.id), refreshShoppingList(currentWeekStart)]);
       showNotice(setNotice, mode === "update" ? "Recipe updated." : "Recipe saved to the library.", "success");
-      await navigateTo(mode === "update" ? `/recipes/${payload.recipe.id}` : "/planner");
+      await navigateTo(mode === "update" ? `/recipes/${payload.recipe.id}` : "/");
     } catch (error) {
       showNotice(setNotice, error.message || "Could not save recipe.", "error");
     } finally {
@@ -301,7 +298,7 @@ export default function App() {
         body: JSON.stringify(queued.plan),
       });
 
-      if (queued.weekStart === currentWeekStart) {
+      if (queued.weekStart === currentWeekStartRef.current) {
         setPlan(payload.plan);
       }
 
@@ -320,14 +317,45 @@ export default function App() {
     }
   }
 
-  function handlePlanChange(day, slot, recipeId) {
+  function handlePlanChange(day, slot, nextSlotValue) {
     if (!plan) {
       return;
     }
 
     const nextPlan = structuredClone(plan);
-    nextPlan.days[day][slot] = recipeId || null;
+    nextPlan.days[day][slot] = normalizeMealSlot(nextSlotValue);
     nextPlan.updatedAt = new Date().toISOString();
+    setPlan(nextPlan);
+    queuePlanSave(nextPlan);
+  }
+
+  function handleBulkPlanChange(days, slot, nextSlotValue) {
+    if (!plan || !days.length) {
+      return;
+    }
+
+    const nextPlan = structuredClone(plan);
+
+    for (const day of days) {
+      nextPlan.days[day][slot] = normalizeMealSlot(nextSlotValue);
+    }
+
+    nextPlan.updatedAt = new Date().toISOString();
+    setPlan(nextPlan);
+    queuePlanSave(nextPlan);
+  }
+
+  function handleClearWeek() {
+    if (!plan) {
+      return;
+    }
+
+    const nextPlan = {
+      ...plan,
+      days: Object.fromEntries(weekDays.map((day) => [day.key, createEmptyDayPlan()])),
+      updatedAt: new Date().toISOString(),
+    };
+
     setPlan(nextPlan);
     queuePlanSave(nextPlan);
   }
@@ -337,10 +365,10 @@ export default function App() {
     setCurrentWeekStart((current) => shiftWeek(current, offsetDays));
   }
 
-  async function openToday() {
+  async function openCurrentWeek(nextRoute = "/cook") {
     await flushPendingPlanSave();
     setCurrentWeekStart(getWeekStartMonday(new Date()));
-    await navigateTo("/today");
+    await navigateTo(nextRoute);
   }
 
   const routeView = (() => {
@@ -348,24 +376,35 @@ export default function App() {
       return <LoadingView />;
     }
 
-    if (route.name === "today") {
-      return <TodayPage currentWeekStart={currentWeekStart} plan={plan} recipeIndex={recipeIndex} onNavigate={navigateTo} />;
+    if (route.name === "cook") {
+      return <CookPage currentWeekStart={currentWeekStart} plan={plan} recipeIndex={recipeIndex} onNavigate={navigateTo} />;
     }
 
-    if (route.name === "planner") {
+    if (route.name === "plan") {
       return (
-        <PlannerPage
+        <PlanPage
           currentWeekStart={currentWeekStart}
-          onPreviousWeek={() => void goToWeek(-7)}
-          onNextWeek={() => void goToWeek(7)}
           weekDays={weekDays}
           plan={plan}
           recipes={recipes}
           recipeIndex={recipeIndex}
-          selectedRecipe={selectedRecipe}
-          onPlanChange={handlePlanChange}
           onNavigate={navigateTo}
+          onPlanChange={handlePlanChange}
+          onBulkPlanChange={handleBulkPlanChange}
+          onClearWeek={handleClearWeek}
           planSaveState={planSaveState}
+        />
+      );
+    }
+
+    if (route.name === "shop") {
+      return (
+        <ShopPage
+          currentWeekStart={currentWeekStart}
+          onNavigate={navigateTo}
+          shoppingList={effectiveShoppingList}
+          hasPlannedMeals={plannedMealCount > 0}
+          loading={loading.shoppingList}
         />
       );
     }
@@ -381,20 +420,6 @@ export default function App() {
           visibleRecipes={visibleRecipes}
           recipes={recipes}
           onNavigate={navigateTo}
-        />
-      );
-    }
-
-    if (route.name === "shoppingList") {
-      return (
-        <ShoppingListPage
-          currentWeekStart={currentWeekStart}
-          onPreviousWeek={() => void goToWeek(-7)}
-          onNextWeek={() => void goToWeek(7)}
-          onNavigate={navigateTo}
-          shoppingList={effectiveShoppingList}
-          hasPlannedMeals={plannedMealCount > 0}
-          loading={loading.shoppingList}
         />
       );
     }
@@ -441,28 +466,20 @@ export default function App() {
       );
     }
 
-    return (
-      <OverviewPage
-        currentWeekStart={currentWeekStart}
-        onPreviousWeek={() => void goToWeek(-7)}
-        onNextWeek={() => void goToWeek(7)}
-        weekDays={weekDays}
-        recipeIndex={recipeIndex}
-        plan={plan}
-        onNavigate={navigateTo}
-      />
-    );
+    return null;
   })();
 
   return (
     <div className="app-shell">
-      <Sidebar
+      <ProductShell
         route={route}
+        currentWeekStart={currentWeekStart}
         recipesCount={recipes.length}
-        plannedMeals={plannedMealCount}
-        weekProgress={weekProgress}
+        planSaveState={planSaveState}
         onNavigate={navigateTo}
-        onOpenToday={openToday}
+        onPreviousWeek={() => void goToWeek(-7)}
+        onNextWeek={() => void goToWeek(7)}
+        onOpenCurrentWeek={() => void openCurrentWeek(getTaskRoutePath(route))}
       />
 
       <main className="workspace">{routeView}</main>
@@ -472,162 +489,229 @@ export default function App() {
   );
 }
 
-function Sidebar({ route, recipesCount, plannedMeals, weekProgress, onNavigate, onOpenToday }) {
-  return (
-    <aside className="sidebar">
-      <div className="brand-card">
-        <div className="brand-mark">M</div>
-        <div>
-          <p className="eyebrow">Meal Atlas</p>
-          <h1>Meal Atlas</h1>
-          <p className="muted">Plan the week, browse your library, and turn meals into one shopping list.</p>
-        </div>
-      </div>
-
-      <nav className="nav-card" aria-label="Primary">
-        {navItems.map((item) => {
-          const active = item.key === "weeklyView" ? route.name === "weeklyView" : route.name === item.key;
-          return (
-            <button
-              key={item.key}
-              type="button"
-              className={`nav-link ${active ? "active" : ""}`}
-              onClick={() => (item.key === "today" ? void onOpenToday() : onNavigate(item.path))}
-            >
-              <span className="nav-link-label">{item.label}</span>
-              <span className="nav-link-note">{item.eyebrow}</span>
-            </button>
-          );
-        })}
-      </nav>
-
-      <section className="metrics-card">
-        <Metric label="Recipes" value={String(recipesCount).padStart(2, "0")} />
-        <Metric label="Meals" value={String(plannedMeals).padStart(2, "0")} />
-        <Metric label="Coverage" value={`${weekProgress}%`} accent />
-      </section>
-    </aside>
-  );
-}
-
-function TodayPage({ currentWeekStart, plan, recipeIndex, onNavigate }) {
-  const todayKey = toIsoDate(new Date());
-  const todayPlan = plan?.days?.[todayKey];
-  const plannedItems = Object.entries(mealSlotLabels)
-    .map(([slot, label]) => {
-      const recipeId = todayPlan?.[slot];
-      const recipe = recipeId ? recipeIndex.get(recipeId) : null;
-      return recipe ? { slot, label, recipe } : null;
-    })
-    .filter(Boolean);
-
-  return (
-    <section className="page-stack">
-      <SectionHeader
-        eyebrow="Today"
-        title={formatTodayHeading(todayKey)}
-        copy={`Current planning week: ${formatWeekHeading(currentWeekStart)}`}
-        actions={
-          <>
-            <button type="button" className="button ghost" onClick={() => onNavigate("/")}>
-              Overview
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/planner")}>
-              Plan
-            </button>
-          </>
-        }
-      />
-
-      <section className="panel today-panel">
-        {plannedItems.length ? (
-          <div className="today-list">
-            {plannedItems.map((item) => (
-              <button key={item.slot} type="button" className="meal-pill today-pill" onClick={() => onNavigate(`/recipes/${item.recipe.id}`)}>
-                <span>{item.label}</span>
-                <strong>{item.recipe.title}</strong>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <EmptyBlock
-            title="Nothing planned for today"
-            copy="Use the planner to assign meals for the current day."
-            actionLabel="Plan today"
-            onAction={() => onNavigate("/planner")}
-          />
-        )}
-      </section>
-    </section>
-  );
-}
-
-function OverviewPage({ currentWeekStart, onPreviousWeek, onNextWeek, weekDays, recipeIndex, plan, onNavigate }) {
-  return (
-    <section className="page-stack">
-      <SectionHeader
-        eyebrow="Overview"
-        title="This week"
-        copy={formatWeekHeading(currentWeekStart)}
-        actions={
-          <>
-            <button type="button" className="button ghost" onClick={onPreviousWeek}>
-              Previous
-            </button>
-            <button type="button" className="button ghost" onClick={onNextWeek}>
-              Next
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/shopping-list")}>
-              Shopping list
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/planner")}>
-              Plan meals
-            </button>
-          </>
-        }
-      />
-
-      <section className="panel overview-panel">
-        <div className="overview-grid">
-          {weekDays.map((day) => (
-            <OverviewCard key={day.key} day={day} dayPlan={plan?.days?.[day.key]} recipeIndex={recipeIndex} onNavigate={onNavigate} />
-          ))}
-        </div>
-      </section>
-    </section>
-  );
-}
-
-function PlannerPage({
+function ProductShell({
+  route,
   currentWeekStart,
+  recipesCount,
+  planSaveState,
+  onNavigate,
   onPreviousWeek,
   onNextWeek,
+  onOpenCurrentWeek,
+}) {
+  const activeTask = getActiveTask(route);
+  const weekIsCurrent = currentWeekStart === getWeekStartMonday(new Date());
+
+  return (
+    <header className="product-shell">
+      <button type="button" className="brand-block" onClick={() => onNavigate("/")}>
+        <span className="brand-mark">M</span>
+        <span className="brand-copy">
+          <strong>Meal Atlas</strong>
+          <span>Weekly household planning</span>
+        </span>
+      </button>
+
+      <nav className="primary-nav" aria-label="Primary">
+        {primaryNavItems.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`primary-nav-link ${activeTask === item.key ? "active" : ""}`}
+            onClick={() => onNavigate(item.path)}
+          >
+            <span>{item.label}</span>
+            <small>{item.note}</small>
+          </button>
+        ))}
+      </nav>
+
+      <div className="shell-controls">
+        <div className="week-switcher">
+          <button type="button" className="icon-button" aria-label="Previous week" onClick={onPreviousWeek}>
+            Prev
+          </button>
+          <div className="week-switcher-copy">
+            <span className="eyebrow">Week</span>
+            <strong>{formatWeekHeading(currentWeekStart)}</strong>
+          </div>
+          <button type="button" className="icon-button" aria-label="Next week" onClick={onNextWeek}>
+            Next
+          </button>
+        </div>
+
+        <div className="shell-utility-group">
+          {!weekIsCurrent ? (
+            <button type="button" className="utility-button" onClick={onOpenCurrentWeek}>
+              This week
+            </button>
+          ) : null}
+          <button type="button" className="utility-button" onClick={() => onNavigate("/library")}>
+            Library
+          </button>
+          <button type="button" className="utility-button accent" onClick={() => onNavigate("/import")}>
+            Import
+          </button>
+          <div className="shell-status-cluster">
+            <span className="shell-count">{recipesCount} recipes</span>
+            <PlanStatus state={planSaveState} />
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function PlanPage({
+  currentWeekStart,
   weekDays,
   plan,
   recipes,
-  onPlanChange,
+  recipeIndex,
   onNavigate,
+  onPlanChange,
+  onBulkPlanChange,
+  onClearWeek,
   planSaveState,
 }) {
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [expandedDays, setExpandedDays] = useState(() => createExpandedDaysState(weekDays));
+  const [applyDays, setApplyDays] = useState(() => createApplyDaysState(weekDays));
+  const [recipeSearch, setRecipeSearch] = useState("");
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const [showSlotEditor, setShowSlotEditor] = useState(false);
+
+  const insights = useMemo(() => buildPlanInsights(plan, weekDays, recipeIndex), [plan, weekDays, recipeIndex]);
+  const selectedSlotValue = selectedSlot ? normalizeMealSlot(plan?.days?.[selectedSlot.dayKey]?.[selectedSlot.slot]) : null;
+  const selectedRecipe = selectedSlotValue?.recipeId ? recipeIndex.get(selectedSlotValue.recipeId) || null : null;
+  const recipeGroups = useMemo(
+    () => groupRecipesForInspector(recipes, selectedSlot?.slot, recipeSearch),
+    [recipes, selectedSlot?.slot, recipeSearch],
+  );
+
+  useEffect(() => {
+    setExpandedDays((current) => mergeExpandedDaysState(current, weekDays, selectedSlot?.dayKey));
+  }, [weekDays, selectedSlot?.dayKey]);
+
+  useEffect(() => {
+    setApplyDays(createApplyDaysState(weekDays, selectedSlot?.dayKey));
+  }, [weekDays, selectedSlot?.dayKey, selectedSlot?.slot]);
+
+  useEffect(() => {
+    setRecipeSearch("");
+  }, [selectedSlot?.dayKey, selectedSlot?.slot]);
+
+  useEffect(() => {
+    if (!showClearDialog) {
+      return undefined;
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        setShowClearDialog(false);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showClearDialog]);
+
+  function toggleDay(dayKey) {
+    setExpandedDays((current) => ({
+      ...current,
+      [dayKey]: !current[dayKey],
+    }));
+  }
+
+  function openSlotEditor(selection) {
+    setSelectedSlot(selection);
+    setExpandedDays((current) => ({
+      ...mergeExpandedDaysState(current, weekDays, selection.dayKey),
+      [selection.dayKey]: true,
+    }));
+    setShowSlotEditor(true);
+  }
+
+  function toggleApplyDay(dayKey) {
+    setApplyDays((current) => ({
+      ...current,
+      [dayKey]: !current[dayKey],
+    }));
+  }
+
+  function applyDayPreset(preset) {
+    if (preset === "all") {
+      setApplyDays(createApplyDaysState(weekDays, selectedSlot?.dayKey, (day) => day.key !== selectedSlot?.dayKey));
+      return;
+    }
+
+    if (preset === "weekdays") {
+      setApplyDays(
+        createApplyDaysState(weekDays, selectedSlot?.dayKey, (_day, index) => index < 5 && weekDays[index].key !== selectedSlot?.dayKey),
+      );
+      return;
+    }
+
+    if (preset === "weekend") {
+      setApplyDays(
+        createApplyDaysState(weekDays, selectedSlot?.dayKey, (_day, index) => index >= 5 && weekDays[index].key !== selectedSlot?.dayKey),
+      );
+      return;
+    }
+
+    setApplyDays(createApplyDaysState(weekDays, selectedSlot?.dayKey));
+  }
+
+  function applyInspectorSelection(nextSlotValue) {
+    if (!selectedSlot) {
+      return;
+    }
+
+    const days = weekDays.filter((day) => applyDays[day.key]).map((day) => day.key);
+    if (!days.length) {
+      return;
+    }
+
+    onBulkPlanChange(days, selectedSlot.slot, nextSlotValue);
+  }
+
+  const metricCards = [
+    {
+      label: "Coverage",
+      count: `${insights.coverage}%`,
+      note: `${insights.coveredCount} of ${insights.totalCount} slots accounted for`,
+    },
+    {
+      label: "At home meals",
+      count: String(insights.assignedCount).padStart(2, "0"),
+      note: `${insights.openCount} slots still open`,
+    },
+    {
+      label: "Meals out",
+      count: String(insights.optionalCount).padStart(2, "0"),
+      note: "Intentionally marked not needed",
+    },
+  ];
+
   if (!recipes.length) {
     return (
       <section className="page-stack">
-        <SectionHeader
+        <PageHeading
+          title="Plan the week"
           eyebrow="Plan"
-          title="Plan meals"
-          copy={formatWeekHeading(currentWeekStart)}
+          copy="Build the recipe library first, then the weekly board becomes the single place to make planning decisions."
           actions={
             <button type="button" className="button primary" onClick={() => onNavigate("/import")}>
-              Add recipe
+              Import first recipe
             </button>
           }
         />
 
-        <section className="panel onboarding-panel">
+        <section className="empty-surface">
           <EmptyBlock
             title="No recipes yet"
-            copy="Add a recipe before planning meals for the week."
-            actionLabel="Add recipe"
+            copy="Import a recipe before planning. Once the library exists, the board and inspector can assign meals in one pass."
+            actionLabel="Go to import"
             onAction={() => onNavigate("/import")}
           />
         </section>
@@ -637,43 +721,630 @@ function PlannerPage({
 
   return (
     <section className="page-stack">
-      <SectionHeader
-        eyebrow="Plan"
-        title="Plan meals"
-        copy={formatWeekHeading(currentWeekStart)}
+      <section className="plan-toolbar">
+        <div className="surface-header-meta">
+          <PlanStatus state={planSaveState} />
+        </div>
+        <div className="action-row">
+          <button type="button" className="button ghost small" onClick={() => setShowClearDialog(true)}>
+            Clear all days
+          </button>
+        </div>
+      </section>
+
+      <section className="metric-strip" aria-label="Plan metrics">
+        {metricCards.map((metric) => (
+          <article key={metric.label} className="metric-card">
+            <span>{metric.label}</span>
+            <strong>{metric.count}</strong>
+            <small>{metric.note}</small>
+          </article>
+        ))}
+      </section>
+
+      <section className="board-surface">
+        <div className="lane-board compact">
+          {weekDays.map((day) => (
+            <DayLane
+              key={day.key}
+              day={day}
+              dayPlan={plan?.days?.[day.key]}
+              recipeIndex={recipeIndex}
+              expanded={Boolean(expandedDays[day.key])}
+              selectedSlot={selectedSlot}
+              onToggleDay={() => toggleDay(day.key)}
+              onSelectSlot={openSlotEditor}
+            />
+          ))}
+        </div>
+      </section>
+
+      {showClearDialog ? (
+        <ConfirmationDialog
+          title="Clear this week?"
+          copy="This will remove every recipe and reset every slot to open for the current week."
+          confirmLabel="Clear all days"
+          onCancel={() => setShowClearDialog(false)}
+          onConfirm={() => {
+            onClearWeek();
+            setShowClearDialog(false);
+          }}
+        />
+      ) : null}
+
+      {showSlotEditor && selectedSlot && selectedSlotValue ? (
+        <SlotEditorDialog
+          currentWeekStart={currentWeekStart}
+          weekDays={weekDays}
+          selectedSlot={selectedSlot}
+          selectedSlotValue={selectedSlotValue}
+          selectedRecipe={selectedRecipe}
+          recipeGroups={recipeGroups}
+          recipeSearch={recipeSearch}
+          applyDays={applyDays}
+          onClose={() => setShowSlotEditor(false)}
+          onRecipeSearchChange={setRecipeSearch}
+          onToggleApplyDay={toggleApplyDay}
+          onApplyDayPreset={applyDayPreset}
+          onNavigate={onNavigate}
+          onPlanChange={onPlanChange}
+          onApplySelection={applyInspectorSelection}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function DayLane({ day, dayPlan, recipeIndex, expanded, selectedSlot, onToggleDay, onSelectSlot }) {
+  const entries = Object.entries(mealSlotLabels).map(([slot, label]) => {
+    const slotValue = normalizeMealSlot(dayPlan?.[slot]);
+    const recipe = slotValue.recipeId ? recipeIndex.get(slotValue.recipeId) || null : null;
+
+    return {
+      slot,
+      label,
+      slotValue,
+      recipe,
+    };
+  });
+
+  const assignedCount = entries.filter((entry) => Boolean(entry.recipe)).length;
+  const openCount = entries.filter((entry) => entry.slotValue.required && !entry.slotValue.recipeId).length;
+  const optionalCount = entries.filter((entry) => !entry.slotValue.required).length;
+
+  return (
+    <article className="day-lane">
+      <button type="button" className="day-lane-toggle" onClick={onToggleDay}>
+        <div>
+          <p className="day-lane-label">{day.label}</p>
+          <span>{formatDayNumber(day.key)}</span>
+        </div>
+
+        <div className="day-lane-stats">
+          <span>{assignedCount} planned</span>
+          <span>{openCount} open</span>
+          {optionalCount ? <span>{optionalCount} out</span> : null}
+          <span className={`chevron ${expanded ? "open" : ""}`} aria-hidden="true" />
+        </div>
+      </button>
+
+      {expanded ? (
+        <div className="lane-slot-row compact">
+          {entries.map((entry) => {
+            const isSelected = selectedSlot?.dayKey === day.key && selectedSlot?.slot === entry.slot;
+
+            return (
+              <button
+                key={`${day.key}-${entry.slot}`}
+                type="button"
+                className={`slot-token compact ${getSlotTone(entry.slotValue)} ${isSelected ? "selected" : ""}`}
+                onClick={() => onSelectSlot({ dayKey: day.key, slot: entry.slot })}
+              >
+                <span className="slot-token-label">{entry.label}</span>
+                <strong>{entry.recipe ? entry.recipe.title : entry.slotValue.required ? "Open" : "Meals out"}</strong>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function SlotEditorDialog({
+  currentWeekStart,
+  weekDays,
+  selectedSlot,
+  selectedSlotValue,
+  selectedRecipe,
+  recipeGroups,
+  recipeSearch,
+  onRecipeSearchChange,
+  applyDays,
+  onToggleApplyDay,
+  onApplyDayPreset,
+  onClose,
+  onNavigate,
+  onPlanChange,
+  onApplySelection,
+}) {
+  if (!selectedSlot || !selectedSlotValue) {
+    return null;
+  }
+
+  const dayLabel = formatLongDayLabel(selectedSlot.dayKey);
+  const applyCount = weekDays.filter((day) => applyDays[day.key]).length;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section className="modal-card slot-editor-modal" role="dialog" aria-modal="true" aria-labelledby="slot-editor-title" onClick={(event) => event.stopPropagation()}>
+        <div className="surface-header">
+          <div>
+            <p className="eyebrow">{dayLabel}</p>
+            <h3 id="slot-editor-title">{mealSlotLabels[selectedSlot.slot]}</h3>
+            <p className="muted">{formatWeekHeading(currentWeekStart)}</p>
+          </div>
+          <div className="action-row">
+            <span className={`state-pill ${getSlotTone(selectedSlotValue)}`}>
+              {!selectedSlotValue.required ? "Meals out" : selectedRecipe ? "Planned" : "Open"}
+            </span>
+            <button type="button" className="button ghost small" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="state-toggle-row">
+          <button
+            type="button"
+            className={`segmented-button ${selectedSlotValue.required ? "active" : ""}`}
+            onClick={() =>
+              onPlanChange(selectedSlot.dayKey, selectedSlot.slot, {
+                recipeId: selectedSlotValue.recipeId,
+                required: true,
+              })
+            }
+          >
+            Meal needed
+          </button>
+          <button
+            type="button"
+            className={`segmented-button ${!selectedSlotValue.required ? "active" : ""}`}
+            onClick={() => onPlanChange(selectedSlot.dayKey, selectedSlot.slot, { recipeId: null, required: false })}
+          >
+            Not needed
+          </button>
+          <button
+            type="button"
+            className="segmented-button"
+            onClick={() => onPlanChange(selectedSlot.dayKey, selectedSlot.slot, { recipeId: null, required: true })}
+          >
+            Clear
+          </button>
+        </div>
+
+        {selectedSlotValue.required ? (
+          <>
+            <section className="editor-section">
+              <div className="block-header">
+                <div>
+                  <p className="eyebrow">Recipe</p>
+                  <h4>{`Choose a ${mealSlotLabels[selectedSlot.slot].toLowerCase()} recipe`}</h4>
+                </div>
+              </div>
+
+              <input
+                className="field"
+                value={recipeSearch}
+                onChange={(event) => onRecipeSearchChange(event.target.value)}
+                placeholder={`Search ${mealSlotLabels[selectedSlot.slot].toLowerCase()} recipes`}
+              />
+
+              <div className="recipe-option-columns compact">
+                <div className="recipe-option-group">
+                  <span className="group-label">Matching recipes</span>
+                  <div className="recipe-option-list">
+                    {recipeGroups.matches.length ? (
+                      recipeGroups.matches.map((recipe) => (
+                        <RecipeOption
+                          key={recipe.id}
+                          recipe={recipe}
+                          active={selectedRecipe?.id === recipe.id}
+                          onSelect={() =>
+                            onPlanChange(selectedSlot.dayKey, selectedSlot.slot, {
+                              recipeId: recipe.id,
+                              required: true,
+                            })
+                          }
+                        />
+                      ))
+                    ) : (
+                      <div className="inline-empty">
+                        {recipeSearch.trim()
+                          ? "No recipes for this meal slot match the current search."
+                          : "No recipes in the library are tagged for this meal slot yet."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {selectedRecipe ? (
+              <div className="inspector-inline-actions">
+                <button type="button" className="button secondary small" onClick={() => onNavigate(`/recipes/${selectedRecipe.id}`)}>
+                  Open recipe
+                </button>
+                <button
+                  type="button"
+                  className="button ghost small"
+                  onClick={() => onPlanChange(selectedSlot.dayKey, selectedSlot.slot, { recipeId: null, required: true })}
+                >
+                  Remove recipe
+                </button>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="inline-empty">This meal is intentionally covered elsewhere and will stay out of the shopping list.</div>
+        )}
+
+        <section className="editor-section">
+          <div className="block-header">
+            <div>
+              <p className="eyebrow">Multi-day apply</p>
+              <h4>Reuse this decision</h4>
+            </div>
+            <span className="subtle-count">{applyCount} selected</span>
+          </div>
+
+          <div className="preset-row">
+            <button type="button" className="mini-button" onClick={() => onApplyDayPreset("all")}>
+              All week
+            </button>
+            <button type="button" className="mini-button" onClick={() => onApplyDayPreset("weekdays")}>
+              Weekdays
+            </button>
+            <button type="button" className="mini-button" onClick={() => onApplyDayPreset("weekend")}>
+              Weekend
+            </button>
+            <button type="button" className="mini-button" onClick={() => onApplyDayPreset("none")}>
+              Clear
+            </button>
+          </div>
+
+          <div className="apply-chip-grid">
+            {weekDays.map((day) => (
+              <label key={day.key} className={`apply-chip ${applyDays[day.key] ? "active" : ""} ${day.key === selectedSlot.dayKey ? "disabled" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(applyDays[day.key])}
+                  disabled={day.key === selectedSlot.dayKey}
+                  onChange={() => onToggleApplyDay(day.key)}
+                />
+                <span>{day.label.slice(0, 3)}</span>
+              </label>
+            ))}
+          </div>
+
+          <div className="apply-action-stack">
+            <button
+              type="button"
+              className="button primary"
+              disabled={!applyCount || (!selectedRecipe && selectedSlotValue.required)}
+              onClick={() =>
+                onApplySelection(
+                  !selectedSlotValue.required
+                    ? { recipeId: null, required: false }
+                    : { recipeId: selectedSlotValue.recipeId, required: true },
+                )
+              }
+            >
+              {!selectedSlotValue.required ? "Mark selected days meals out" : selectedRecipe ? "Apply recipe to selected days" : "Select a recipe first"}
+            </button>
+
+            <div className="split-action-row">
+              <button
+                type="button"
+                className="button secondary small"
+                disabled={!applyCount}
+                onClick={() => onApplySelection({ recipeId: null, required: false })}
+              >
+                Mark meals out
+              </button>
+              <button
+                type="button"
+                className="button ghost small"
+                disabled={!applyCount}
+                onClick={() => onApplySelection({ recipeId: null, required: true })}
+              >
+                Clear selected
+              </button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function RecipeOption({ recipe, active, onSelect }) {
+  const secondaryLine = recipe.description?.trim() || getRecipeMeta(recipe);
+  const detailLine = recipe.description?.trim() ? getRecipeMeta(recipe) : null;
+
+  return (
+    <button type="button" className={`recipe-option ${active ? "active" : ""}`} onClick={onSelect}>
+      <strong>{recipe.title}</strong>
+      <span>{secondaryLine}</span>
+      {detailLine ? <small>{detailLine}</small> : null}
+    </button>
+  );
+}
+
+function CookPage({ currentWeekStart, plan, recipeIndex, onNavigate }) {
+  const todayKey = toIsoDate(new Date());
+  const activeWeekDays = listWeekDates(currentWeekStart);
+  const containsToday = activeWeekDays.some((day) => day.key === todayKey);
+  const todayPlan = containsToday ? plan?.days?.[todayKey] : null;
+  const todayItems = Object.entries(mealSlotLabels)
+    .map(([slot, label]) => {
+      const slotValue = normalizeMealSlot(todayPlan?.[slot]);
+      const recipe = slotValue.recipeId ? recipeIndex.get(slotValue.recipeId) || null : null;
+
+      if (recipe) {
+        return { slot, label, recipe, tone: "assigned" };
+      }
+
+      if (!slotValue.required) {
+        return { slot, label, recipe: null, tone: "notNeeded" };
+      }
+
+      return null;
+    })
+    .filter(Boolean);
+
+  const upcomingItems = listUpcomingCookItems(plan, activeWeekDays, recipeIndex, containsToday ? todayKey : activeWeekDays[0]?.key).slice(0, 6);
+
+  return (
+    <section className="page-stack">
+      <PageHeading
+        title="Cook"
+        eyebrow="Cook"
+        copy={
+          containsToday
+            ? `Today is ${formatTodayHeading(todayKey)}. Focus on what is planned now and what is coming next.`
+            : `The active week is ${formatWeekHeading(currentWeekStart)}. Jump to the current week to see today's meals.`
+        }
         actions={
           <>
-            <button type="button" className="button ghost" onClick={onPreviousWeek}>
-              Previous
-            </button>
-            <button type="button" className="button ghost" onClick={onNextWeek}>
-              Next
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/library")}>
-              Library
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/shopping-list")}>
-              Shopping list
+            {!containsToday ? (
+              <button type="button" className="button ghost" onClick={() => onNavigate("/")}>
+                Open plan
+              </button>
+            ) : null}
+            <button type="button" className="button secondary" onClick={() => onNavigate("/shop")}>
+              Open shopping
             </button>
           </>
         }
       />
 
-      <section className="panel planner-panel">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Planner</p>
-            <h3>Daily slots</h3>
+      <div className="support-layout">
+        <section className="support-surface">
+          <div className="surface-header">
+            <div>
+              <p className="eyebrow">Today</p>
+              <h3>{containsToday ? "Today's lineup" : "Today is outside this week"}</h3>
+            </div>
           </div>
-          <PlanStatus state={planSaveState} />
-        </div>
 
-        <div className="planner-board">
-          {weekDays.map((day) => (
-            <PlannerDayCard key={day.key} day={day} dayPlan={plan?.days?.[day.key]} recipes={recipes} onPlanChange={onPlanChange} />
-          ))}
+          {containsToday ? (
+            todayItems.length ? (
+              <div className="cook-list">
+                {todayItems.map((item) => (
+                  <article key={item.slot} className={`cook-card ${item.tone}`}>
+                    <div>
+                      <span className="eyebrow">{item.label}</span>
+                      <h4>{item.recipe ? item.recipe.title : "Not needed"}</h4>
+                      <p className="muted">
+                        {item.recipe
+                          ? item.recipe.description || getRecipeMeta(item.recipe)
+                          : "This meal slot is intentionally covered elsewhere."}
+                      </p>
+                    </div>
+                    <div className="action-row">
+                      {item.recipe ? (
+                        <button type="button" className="button secondary small" onClick={() => onNavigate(`/recipes/${item.recipe.id}`)}>
+                          View recipe
+                        </button>
+                      ) : null}
+                      <button type="button" className="button ghost small" onClick={() => onNavigate("/")}>
+                        Adjust in plan
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyBlock
+                title="Nothing queued for today"
+                copy="Open the planner to assign meals or mark slots as intentionally not needed."
+                actionLabel="Open plan"
+                onAction={() => onNavigate("/")}
+              />
+            )
+          ) : (
+            <EmptyBlock
+              title="Today's date is not in the active week"
+              copy="Switch back to the current week from the shell if you want a live cooking view for today."
+              actionLabel="Open current week plan"
+              onAction={() => onNavigate("/")}
+            />
+          )}
+        </section>
+
+        <aside className="support-surface">
+          <div className="surface-header">
+            <div>
+              <p className="eyebrow">Next up</p>
+              <h3>Coming soon</h3>
+            </div>
+          </div>
+
+          {upcomingItems.length ? (
+            <div className="queue-list">
+              {upcomingItems.map((item) => (
+                <button
+                  key={`${item.dayKey}-${item.slot}`}
+                  type="button"
+                  className="queue-item detailed"
+                  onClick={() => (item.recipe ? onNavigate(`/recipes/${item.recipe.id}`) : onNavigate("/"))}
+                >
+                  <span>{`${item.dayLabel} · ${item.slotLabel}`}</span>
+                  <strong>{item.recipe ? item.recipe.title : "Not needed"}</strong>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="inline-empty">No upcoming meals are planned in this week yet.</div>
+          )}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function ShopPage({ currentWeekStart, onNavigate, shoppingList, hasPlannedMeals, loading }) {
+  const items = shoppingList?.items || [];
+  const recipeTitles = shoppingList?.recipeTitles || [];
+  const uncategorized = shoppingList?.uncategorized || [];
+  const groupedItems = useMemo(() => groupShoppingItemsByCategory(items), [items]);
+  const [openSources, setOpenSources] = useState({});
+
+  function toggleSources(key) {
+    setOpenSources((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  }
+
+  return (
+    <section className="page-stack">
+      <PageHeading
+        title="Shop the week"
+        eyebrow="Shop"
+        copy={`${formatWeekHeading(currentWeekStart)} · Build one combined list from the planned recipes only.`}
+        actions={
+          <div className="hero-stat-group">
+            <div className="hero-stat">
+              <span>Recipes</span>
+              <strong>{String(recipeTitles.length).padStart(2, "0")}</strong>
+            </div>
+            <div className="hero-stat">
+              <span>Items</span>
+              <strong>{String(items.length).padStart(2, "0")}</strong>
+            </div>
+          </div>
+        }
+      />
+
+      {!recipeTitles.length && !loading ? (
+        <section className="empty-surface">
+          <EmptyBlock
+            title={hasPlannedMeals ? "Shopping list still syncing" : "No planned recipes yet"}
+            copy={
+              hasPlannedMeals
+                ? "Planned meals exist for this week, but the grouped shopping view has not filled in yet."
+                : "Plan the week first. Slots marked not needed are intentionally excluded."
+            }
+            actionLabel="Open plan"
+            onAction={() => onNavigate("/")}
+          />
+        </section>
+      ) : (
+        <div className="support-layout">
+          <section className="support-surface">
+            <div className="surface-header">
+              <div>
+                <p className="eyebrow">Checklist</p>
+                <h3>{loading ? "Refreshing shopping list" : "Grouped items"}</h3>
+              </div>
+              <div className={`status-pill ${loading ? "saving" : ""}`}>{loading ? "Refreshing" : "Ready"}</div>
+            </div>
+
+            <div className="shopping-category-list">
+              {groupedItems.map((group) => (
+                <section key={group.category} className="shopping-group-card">
+                  <div className="shopping-group-header">
+                    <h4>{group.category}</h4>
+                    <span>{group.items.length} items</span>
+                  </div>
+
+                  <div className="shopping-checklist">
+                    {group.items.map((item) => (
+                      <article key={item.key} className="shopping-checklist-item">
+                        <div className="shopping-checklist-row">
+                          <label className="shopping-check">
+                            <input type="checkbox" />
+                            <span className="shopping-check-copy">
+                              <strong>{item.quantityLabel ? `${item.quantityLabel} ${item.displayName}` : item.displayName}</strong>
+                            </span>
+                          </label>
+                          <button type="button" className="text-button" onClick={() => toggleSources(item.key)}>
+                            {openSources[item.key] ? "Hide source" : "Source"}
+                          </button>
+                        </div>
+
+                        {openSources[item.key] ? (
+                          <div className="shopping-source-list">
+                            {item.recipes.map((recipeTitle) => (
+                              <span key={`${item.key}-${recipeTitle}`} className="chip">
+                                {recipeTitle}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </section>
+
+          <aside className="support-surface">
+            <div className="surface-header">
+              <div>
+                <p className="eyebrow">Recipes in play</p>
+                <h3>What is driving the list</h3>
+              </div>
+            </div>
+
+            {recipeTitles.length ? (
+              <div className="chip-cloud">
+                {recipeTitles.map((title) => (
+                  <span key={title} className="chip accent">
+                    {title}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="inline-empty">No recipes have contributed items yet.</div>
+            )}
+
+            {uncategorized.length ? (
+              <div className="manual-review-block">
+                <span className="group-label">Manual review</span>
+                <ul className="detail-list">
+                  {uncategorized.map((entry) => (
+                    <li key={`${entry.recipeId}-${entry.ingredient}`}>{entry.ingredient}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </aside>
         </div>
-      </section>
+      )}
     </section>
   );
 }
@@ -690,22 +1361,22 @@ function LibraryPage({
 }) {
   return (
     <section className="page-stack">
-      <SectionHeader
-        eyebrow="Library"
+      <PageHeading
         title="Recipe library"
-        copy="Browse, preview, and edit saved recipes."
+        eyebrow="Library"
+        copy="Treat recipes as a shared asset system for planning, cooking, and shopping."
         actions={
-          <button type="button" className="button secondary" onClick={() => onNavigate("/import")}>
-            Add recipe
+          <button type="button" className="button primary" onClick={() => onNavigate("/import")}>
+            Import recipe
           </button>
         }
       />
 
-      <div className="content-grid">
-        <section className="panel library-panel">
-          <div className="panel-header">
+      <div className="support-layout wide-support-layout">
+        <section className="support-surface">
+          <div className="surface-header">
             <div>
-              <p className="eyebrow">Recipes</p>
+              <p className="eyebrow">Browse</p>
               <h3>Saved recipes</h3>
             </div>
           </div>
@@ -718,7 +1389,7 @@ function LibraryPage({
           />
 
           {visibleRecipes.length ? (
-            <div className="recipe-list">
+            <div className="recipe-library-grid">
               {visibleRecipes.map((recipe) => (
                 <RecipeCard
                   key={recipe.id}
@@ -732,30 +1403,30 @@ function LibraryPage({
             </div>
           ) : (
             <EmptyBlock
-              title={recipes.length ? "No matching recipes" : "No recipes yet"}
+              title={recipes.length ? "No recipes match this search" : "No recipes yet"}
               copy={
                 recipes.length
-                  ? "Try a broader search term or import a new recipe."
-                  : "Add a recipe to start building the library."
+                  ? "Try a broader search or import another recipe."
+                  : "Import a recipe to begin using the planning board."
               }
-              actionLabel="Add recipe"
+              actionLabel="Import recipe"
               onAction={() => onNavigate("/import")}
             />
           )}
         </section>
 
-        <section className="panel detail-panel">
-          <div className="panel-header">
+        <aside className="support-surface">
+          <div className="surface-header">
             <div>
               <p className="eyebrow">Preview</p>
-              <h3>Selected recipe</h3>
+              <h3>{selectedRecipe ? selectedRecipe.title : "Selected recipe"}</h3>
             </div>
             {selectedRecipe ? (
               <div className="action-row">
-                <button type="button" className="button secondary" onClick={() => onNavigate(`/recipes/${selectedRecipe.id}`)}>
+                <button type="button" className="button secondary small" onClick={() => onNavigate(`/recipes/${selectedRecipe.id}`)}>
                   Open
                 </button>
-                <button type="button" className="button ghost" onClick={() => onNavigate(`/recipes/${selectedRecipe.id}/edit`)}>
+                <button type="button" className="button ghost small" onClick={() => onNavigate(`/recipes/${selectedRecipe.id}/edit`)}>
                   Edit
                 </button>
               </div>
@@ -765,153 +1436,10 @@ function LibraryPage({
           {selectedRecipe ? (
             <RecipeDetail recipe={selectedRecipe} />
           ) : (
-            <EmptyBlock title="No recipe selected" copy="Choose a recipe from the library to preview it here." />
+            <EmptyBlock title="Pick a recipe" copy="Choose a recipe from the library to preview its ingredients and method." />
           )}
-        </section>
+        </aside>
       </div>
-    </section>
-  );
-}
-
-function ShoppingListPage({ currentWeekStart, onPreviousWeek, onNextWeek, onNavigate, shoppingList, hasPlannedMeals, loading }) {
-  const items = shoppingList?.items || [];
-  const recipeTitles = shoppingList?.recipeTitles || [];
-  const uncategorized = shoppingList?.uncategorized || [];
-  const hasPlannedRecipes = recipeTitles.length > 0;
-  const [openSources, setOpenSources] = useState({});
-  const groupedItems = useMemo(() => groupShoppingItemsByCategory(items), [items]);
-
-  function toggleSources(key) {
-    setOpenSources((current) => ({
-      ...current,
-      [key]: !current[key],
-    }));
-  }
-
-  return (
-    <section className="page-stack">
-      <SectionHeader
-        eyebrow="Shopping"
-        title="Combined shopping list"
-        copy={formatWeekHeading(currentWeekStart)}
-        actions={
-          <>
-            <button type="button" className="button ghost" onClick={onPreviousWeek}>
-              Previous
-            </button>
-            <button type="button" className="button ghost" onClick={onNextWeek}>
-              Next
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/planner")}>
-              Plan
-            </button>
-          </>
-        }
-      />
-
-      <section className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Recipes</p>
-            <h3>
-              {hasPlannedRecipes
-                ? `${recipeTitles.length} planned recipe${recipeTitles.length === 1 ? "" : "s"}`
-                : loading
-                  ? "Loading shopping list"
-                  : hasPlannedMeals
-                    ? "Planned meals found"
-                    : "Nothing planned yet"}
-            </h3>
-          </div>
-          <div className={`status-chip ${loading ? "saving" : ""}`}>{loading ? "Refreshing..." : "Up to date"}</div>
-        </div>
-
-        {hasPlannedRecipes ? (
-          <div className="chip-row">
-            {recipeTitles.map((title) => (
-              <span key={title} className="chip chip-accent">
-                {title}
-              </span>
-            ))}
-          </div>
-        ) : hasPlannedMeals ? (
-          <EmptyBlock
-            title="Shopping list still syncing"
-            copy="The planner has meals for this week. Reopen this page or change weeks if the grouped list has not filled in yet."
-          />
-        ) : (
-          <EmptyBlock
-            title={loading ? "Refreshing shopping list" : "No planned recipes"}
-            copy={loading ? "Checking the current week for planned meals." : "Plan meals for the week to generate a combined shopping list."}
-            actionLabel={loading ? undefined : "Plan meals"}
-            onAction={loading ? undefined : () => onNavigate("/planner")}
-          />
-        )}
-      </section>
-
-      {items.length ? (
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Items</p>
-              <h3>Checklist</h3>
-            </div>
-          </div>
-
-          <div className="shopping-category-list">
-            {groupedItems.map((group) => (
-              <section key={group.category} className="shopping-category-section">
-                <div className="shopping-category-header">
-                  <p className="eyebrow">{group.category}</p>
-                </div>
-
-                <div className="shopping-checklist">
-                  {group.items.map((item) => (
-                    <article key={item.key} className="shopping-checklist-item">
-                      <div className="shopping-checklist-row">
-                        <label className="shopping-check">
-                          <input type="checkbox" />
-                          <span className="shopping-check-copy">
-                            <strong>{item.quantityLabel ? `${item.quantityLabel} ${item.displayName}` : item.displayName}</strong>
-                          </span>
-                        </label>
-                        <button type="button" className="text-button" onClick={() => toggleSources(item.key)}>
-                          {openSources[item.key] ? "Hide source" : "Source"}
-                        </button>
-                      </div>
-                      {openSources[item.key] ? (
-                        <div className="shopping-source-list">
-                          {item.recipes.map((recipeTitle) => (
-                            <span key={`${item.key}-${recipeTitle}`} className="chip">
-                              {recipeTitle}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {uncategorized.length ? (
-        <section className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Review</p>
-              <h3>Items to check manually</h3>
-            </div>
-          </div>
-          <ul className="detail-list">
-            {uncategorized.map((entry) => (
-              <li key={`${entry.recipeId}-${entry.ingredient}`}>{entry.ingredient}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
     </section>
   );
 }
@@ -929,23 +1457,23 @@ function ImporterPage({
 }) {
   return (
     <section className="page-stack">
-      <SectionHeader
+      <PageHeading
+        title="Import a recipe"
         eyebrow="Import"
-        title="Import recipe"
-        copy="Paste recipe text and review it before saving."
+        copy="Paste recipe text, parse it, then review the structured draft before saving."
         actions={
-          <button type="button" className="button secondary" onClick={() => onNavigate("/planner")}>
-            Back to plan
+          <button type="button" className="button ghost" onClick={() => onNavigate("/library")}>
+            Library
           </button>
         }
       />
 
-      <div className="content-grid importer-grid">
-        <section className="panel import-panel">
-          <div className="panel-header">
+      <div className="support-layout wide-support-layout">
+        <section className="support-surface">
+          <div className="surface-header">
             <div>
               <p className="eyebrow">Step 1</p>
-              <h3>Paste recipe text</h3>
+              <h3>Paste source text</h3>
             </div>
           </div>
 
@@ -966,19 +1494,18 @@ function ImporterPage({
           </div>
         </section>
 
-        <section className="panel review-panel">
-          <div className="panel-header">
+        <section className="support-surface">
+          <div className="surface-header">
             <div>
               <p className="eyebrow">Step 2</p>
-              <h3>Review before saving</h3>
+              <h3>Review draft</h3>
             </div>
-            <p className="muted">Check the title, ingredients, steps, and tags.</p>
           </div>
 
           {draftRecipe ? (
             <DraftForm recipe={draftRecipe} onSubmit={onSaveRecipe} saving={saving} submitLabel="Save recipe" />
           ) : (
-            <EmptyBlock title="Nothing to review yet" copy="Paste recipe text and run the parser to fill this form." />
+            <EmptyBlock title="No draft yet" copy="Run the parser to populate the editable recipe form." />
           )}
         </section>
       </div>
@@ -990,13 +1517,13 @@ function RecipePage({ recipe, currentWeekStart, onNavigate, weekDays, plan }) {
   if (!recipe) {
     return (
       <section className="page-stack">
-        <SectionHeader
-          eyebrow="Recipe"
+        <PageHeading
           title="Recipe not found"
+          eyebrow="Recipe"
           copy="The selected recipe is not available in the local library."
           actions={
-            <button type="button" className="button secondary" onClick={() => onNavigate("/")}>
-              Back home
+            <button type="button" className="button secondary" onClick={() => onNavigate("/library")}>
+              Back to library
             </button>
           }
         />
@@ -1007,7 +1534,7 @@ function RecipePage({ recipe, currentWeekStart, onNavigate, weekDays, plan }) {
   const placements = weekDays
     .map((day) => {
       const slots = Object.entries(mealSlotLabels)
-        .filter(([slot]) => plan?.days?.[day.key]?.[slot] === recipe.id)
+        .filter(([slot]) => getMealSlotRecipeId(plan?.days?.[day.key]?.[slot]) === recipe.id)
         .map(([, label]) => label);
       return slots.length ? { day: day.label, slots } : null;
     })
@@ -1015,34 +1542,35 @@ function RecipePage({ recipe, currentWeekStart, onNavigate, weekDays, plan }) {
 
   return (
     <section className="page-stack">
-      <SectionHeader
-        eyebrow="Recipe"
+      <PageHeading
         title={recipe.title}
+        eyebrow="Recipe"
         copy={recipe.description || "Ingredients and method."}
         actions={
           <>
-            <div className="hero-chip">{formatWeekHeading(currentWeekStart)}</div>
-            <button type="button" className="button ghost" onClick={() => onNavigate("/")}>
-              Overview
+            <div className="hero-stat">
+              <span>Week</span>
+              <strong>{formatWeekHeading(currentWeekStart)}</strong>
+            </div>
+            <button type="button" className="button ghost" onClick={() => onNavigate("/library")}>
+              Library
             </button>
             <button type="button" className="button secondary" onClick={() => onNavigate(`/recipes/${recipe.id}/edit`)}>
               Edit
-            </button>
-            <button type="button" className="button secondary" onClick={() => onNavigate("/planner")}>
-              Plan
             </button>
           </>
         }
       />
 
       {placements.length ? (
-        <section className="panel placement-panel">
-          <div className="panel-header">
+        <section className="support-surface">
+          <div className="surface-header">
             <div>
-              <p className="eyebrow">This week</p>
-              <h3>Scheduled meals</h3>
+              <p className="eyebrow">Scheduled this week</p>
+              <h3>Current placements</h3>
             </div>
           </div>
+
           <div className="placement-list">
             {placements.map((entry) => (
               <div key={entry.day} className="placement-chip">
@@ -1054,7 +1582,7 @@ function RecipePage({ recipe, currentWeekStart, onNavigate, weekDays, plan }) {
         </section>
       ) : null}
 
-      <section className="panel detail-panel">
+      <section className="support-surface">
         <RecipeDetail recipe={recipe} />
       </section>
     </section>
@@ -1065,13 +1593,13 @@ function RecipeEditorPage({ recipe, onNavigate, onSaveRecipe, saving }) {
   if (!recipe) {
     return (
       <section className="page-stack">
-        <SectionHeader
-          eyebrow="Edit"
+        <PageHeading
           title="Recipe not found"
+          eyebrow="Edit"
           copy="The recipe you tried to edit is not available in the local library."
           actions={
-            <button type="button" className="button secondary" onClick={() => onNavigate("/planner")}>
-              Back to plan
+            <button type="button" className="button secondary" onClick={() => onNavigate("/library")}>
+              Back to library
             </button>
           }
         />
@@ -1081,10 +1609,10 @@ function RecipeEditorPage({ recipe, onNavigate, onSaveRecipe, saving }) {
 
   return (
     <section className="page-stack">
-      <SectionHeader
-        eyebrow="Edit"
+      <PageHeading
         title={`Edit ${recipe.title}`}
-        copy="Update the saved recipe in your local library."
+        eyebrow="Edit"
+        copy="Update the saved recipe in the local library."
         actions={
           <>
             <button type="button" className="button ghost" onClick={() => onNavigate(`/recipes/${recipe.id}`)}>
@@ -1097,74 +1625,10 @@ function RecipeEditorPage({ recipe, onNavigate, onSaveRecipe, saving }) {
         }
       />
 
-      <section className="panel review-panel">
+      <section className="support-surface">
         <DraftForm recipe={recipe} onSubmit={onSaveRecipe} saving={saving} submitLabel="Update recipe" />
       </section>
     </section>
-  );
-}
-
-function PlannerDayCard({ day, dayPlan, recipes, onPlanChange }) {
-  return (
-    <article className="planner-day-card">
-      <div className="day-card-header">
-        <div>
-          <h4>{day.label}</h4>
-          <span>{formatDayNumber(day.key)}</span>
-        </div>
-        <div className="day-badge">{Object.values(dayPlan || {}).filter(Boolean).length} planned</div>
-      </div>
-
-      <div className="slot-list">
-        {Object.entries(mealSlotLabels).map(([slot, label]) => (
-          <label className="slot-field" key={slot}>
-            <span>{label}</span>
-            <select className="field" value={dayPlan?.[slot] || ""} onChange={(event) => onPlanChange(day.key, slot, event.target.value)}>
-              <option value="">Unplanned</option>
-              {recipes.map((recipe) => (
-                <option key={recipe.id} value={recipe.id}>
-                  {recipe.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function OverviewCard({ day, dayPlan, recipeIndex, onNavigate }) {
-  const items = Object.entries(mealSlotLabels)
-    .map(([slot, label]) => {
-      const recipeId = dayPlan?.[slot];
-      const recipe = recipeId ? recipeIndex.get(recipeId) : null;
-      return recipe ? { label, recipe } : null;
-    })
-    .filter(Boolean);
-
-  return (
-    <article className="overview-card">
-      <div className="day-card-header">
-        <div>
-          <h4>{day.label}</h4>
-          <span>{formatDayNumber(day.key)}</span>
-        </div>
-      </div>
-
-      {items.length ? (
-        <div className="meal-pill-list">
-          {items.map((item) => (
-            <button key={`${day.key}-${item.label}`} type="button" className="meal-pill" onClick={() => onNavigate(`/recipes/${item.recipe.id}`)}>
-              <span>{item.label}</span>
-              <strong>{item.recipe.title}</strong>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="empty-slot-note">No meals planned yet.</div>
-      )}
-    </article>
   );
 }
 
@@ -1174,23 +1638,20 @@ function RecipeCard({ recipe, active, onSelect, onOpen, onEdit }) {
       <div className="recipe-card-top">
         <div>
           <strong>{recipe.title}</strong>
-          <p className="muted">{recipe.description || "No description."}</p>
+          <p className="muted">{recipe.description || getRecipeMeta(recipe)}</p>
         </div>
         <button type="button" className="mini-button" onClick={onSelect}>
           Preview
         </button>
       </div>
 
-      <div className="chip-row">
+      <div className="chip-cloud">
         {recipe.mealTypes.map((mealType) => (
-          <span key={mealType} className="chip chip-accent">
+          <span key={mealType} className="chip accent">
             {mealType}
           </span>
         ))}
-      </div>
-
-      <div className="chip-row">
-        {recipe.tags.slice(0, 4).map((tag) => (
+        {recipe.tags.slice(0, 3).map((tag) => (
           <span key={tag} className="chip">
             {tag}
           </span>
@@ -1198,7 +1659,7 @@ function RecipeCard({ recipe, active, onSelect, onOpen, onEdit }) {
       </div>
 
       <div className="card-footer">
-        <span>{recipe.ingredients.length} ingredients</span>
+        <span>{getRecipeMeta(recipe)}</span>
         <div className="action-row">
           <button type="button" className="text-button" onClick={onEdit}>
             Edit
@@ -1220,16 +1681,17 @@ function RecipeDetail({ recipe }) {
           <h3>{recipe.title}</h3>
           <p className="muted">{recipe.description || "No description."}</p>
         </div>
-        <div className="chip-row">
-          {recipe.servings ? <span className="chip chip-accent">Serves {recipe.servings}</span> : null}
+
+        <div className="chip-cloud">
+          {recipe.servings ? <span className="chip accent">Serves {recipe.servings}</span> : null}
           {recipe.prepTimeMinutes ? <span className="chip">Prep {recipe.prepTimeMinutes} min</span> : null}
           {recipe.cookTimeMinutes ? <span className="chip">Cook {recipe.cookTimeMinutes} min</span> : null}
         </div>
       </div>
 
-      <div className="chip-row">
+      <div className="chip-cloud">
         {recipe.mealTypes.map((mealType) => (
-          <span key={mealType} className="chip chip-accent">
+          <span key={mealType} className="chip accent">
             {mealType}
           </span>
         ))}
@@ -1346,37 +1808,29 @@ function DraftForm({ recipe, onSubmit, saving, submitLabel }) {
   );
 }
 
-function PlanStatus({ state }) {
-  const labels = {
-    idle: "All changes saved",
-    queued: "Changes queued",
-    saving: "Saving changes...",
-    error: "Save failed",
-  };
-
-  return <div className={`status-chip ${state === "queued" ? "pending" : state === "saving" ? "saving" : ""}`}>{labels[state] || labels.idle}</div>;
-}
-
-function SectionHeader({ eyebrow, title, copy, actions }) {
+function PageHeading({ eyebrow, title, copy, actions }) {
   return (
-    <section className="section-header-block">
+    <section className="page-heading">
       <div>
         <p className="eyebrow">{eyebrow}</p>
-        <h3>{title}</h3>
+        <h1>{title}</h1>
         <p className="muted">{copy}</p>
       </div>
+
       <div className="action-row">{actions}</div>
     </section>
   );
 }
 
-function Metric({ label, value, accent = false }) {
-  return (
-    <div className={`metric-card ${accent ? "accent" : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+function PlanStatus({ state }) {
+  const labels = {
+    idle: "Saved",
+    queued: "Queued",
+    saving: "Saving",
+    error: "Error",
+  };
+
+  return <span className={`status-pill ${state === "queued" ? "pending" : state === "saving" ? "saving" : state === "error" ? "error" : ""}`}>{labels[state] || labels.idle}</span>;
 }
 
 function EmptyBlock({ title, copy, actionLabel, onAction }) {
@@ -1393,12 +1847,35 @@ function EmptyBlock({ title, copy, actionLabel, onAction }) {
   );
 }
 
+function ConfirmationDialog({ title, copy, confirmLabel, onCancel, onConfirm }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmation-dialog-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-copy">
+          <p className="eyebrow">Confirm</p>
+          <h3 id="confirmation-dialog-title">{title}</h3>
+          <p className="muted">{copy}</p>
+        </div>
+
+        <div className="action-row">
+          <button type="button" className="button ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="button danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function LoadingView() {
   return (
     <section className="page-stack">
-      <div className="panel loading-panel">
+      <div className="loading-surface">
         <div className="loading-orb" />
-        <h3>Loading</h3>
+        <h3>Loading Meal Atlas</h3>
         <p className="muted">Fetching recipes, this week&apos;s plan, and the shopping list.</p>
       </div>
     </section>
@@ -1484,24 +1961,20 @@ function matchesRecipeSearch(recipe, search) {
 function parseRoute(pathname) {
   const normalized = normalizeRoutePath(pathname);
 
-  if (normalized === "/" || normalized === "/home") {
-    return { name: "weeklyView" };
+  if (normalized === "/" || normalized === "/home" || normalized === "/planner") {
+    return { name: "plan" };
   }
 
-  if (normalized === "/today") {
-    return { name: "today" };
+  if (normalized === "/cook" || normalized === "/today") {
+    return { name: "cook" };
   }
 
-  if (normalized === "/planner") {
-    return { name: "planner" };
+  if (normalized === "/shop" || normalized === "/shopping-list") {
+    return { name: "shop" };
   }
 
   if (normalized === "/library") {
     return { name: "library" };
-  }
-
-  if (normalized === "/shopping-list") {
-    return { name: "shoppingList" };
   }
 
   if (normalized === "/import") {
@@ -1520,7 +1993,7 @@ function parseRoute(pathname) {
     return { name: "recipe", recipeId: decodeURIComponent(recipeMatch[1]) };
   }
 
-  return { name: "weeklyView" };
+  return { name: "plan" };
 }
 
 function normalizeRoutePath(pathname) {
@@ -1585,6 +2058,30 @@ function normalizeBasePath(pathname) {
   return normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
 }
 
+function getActiveTask(route) {
+  if (route.name === "cook") {
+    return "cook";
+  }
+
+  if (route.name === "shop") {
+    return "shop";
+  }
+
+  return "plan";
+}
+
+function getTaskRoutePath(route) {
+  if (route.name === "cook") {
+    return "/cook";
+  }
+
+  if (route.name === "shop") {
+    return "/shop";
+  }
+
+  return "/";
+}
+
 function listWeekDates(weekStart) {
   const start = parseIsoDate(weekStart);
   const formatter = new Intl.DateTimeFormat(undefined, { weekday: "long" });
@@ -1605,7 +2102,256 @@ function countPlannedMeals(plan) {
     return 0;
   }
 
-  return Object.values(plan.days).reduce((count, day) => count + Object.values(day).filter(Boolean).length, 0);
+  return Object.values(plan.days).reduce(
+    (count, day) => count + Object.values(day).filter((slotValue) => isMealSlotCovered(slotValue)).length,
+    0,
+  );
+}
+
+function buildPlanInsights(plan, weekDays, recipeIndex) {
+  const totalCount = weekDays.length * mealSlotKeys.length;
+  const queue = listOpenMealSlots(plan, weekDays);
+  const optionalCount = Object.values(plan?.days || {}).reduce(
+    (count, dayPlan) => count + Object.values(dayPlan || {}).filter((slotValue) => !normalizeMealSlot(slotValue).required).length,
+    0,
+  );
+  const assignedRecipes = listPlannedRecipes(plan, recipeIndex);
+  const assignedCount = Object.values(plan?.days || {}).reduce(
+    (count, dayPlan) =>
+      count +
+      Object.values(dayPlan || {}).filter((slotValue) => {
+        const normalized = normalizeMealSlot(slotValue);
+        return normalized.required && Boolean(normalized.recipeId);
+      }).length,
+    0,
+  );
+  const coveredCount = countPlannedMeals(plan);
+
+  return {
+    totalCount,
+    coveredCount,
+    coverage: Math.round((coveredCount / (totalCount || 1)) * 100),
+    openCount: queue.length,
+    optionalCount,
+    assignedCount,
+    assignedRecipes,
+    queue,
+  };
+}
+
+function listOpenMealSlots(plan, weekDays) {
+  return weekDays.flatMap((day) =>
+    Object.entries(mealSlotLabels)
+      .map(([slot, slotLabel]) => {
+        const slotValue = normalizeMealSlot(plan?.days?.[day.key]?.[slot]);
+
+        if (!slotValue.required || slotValue.recipeId) {
+          return null;
+        }
+
+        return {
+          dayKey: day.key,
+          dayLabel: day.label,
+          slot,
+          slotLabel,
+        };
+      })
+      .filter(Boolean),
+  );
+}
+
+function listPlannedRecipes(plan, recipeIndex) {
+  const seen = new Map();
+
+  for (const dayPlan of Object.values(plan?.days || {})) {
+    for (const slotValue of Object.values(dayPlan || {})) {
+      const recipeId = getMealSlotRecipeId(slotValue);
+
+      if (!recipeId || seen.has(recipeId)) {
+        continue;
+      }
+
+      const recipe = recipeIndex.get(recipeId);
+      if (recipe) {
+        seen.set(recipeId, recipe);
+      }
+    }
+  }
+
+  return Array.from(seen.values()).sort((left, right) => left.title.localeCompare(right.title));
+}
+
+function flattenPlanSlots(plan, weekDays, recipeIndex) {
+  return weekDays.flatMap((day) =>
+    Object.entries(mealSlotLabels).map(([slot, slotLabel]) => {
+      const slotValue = normalizeMealSlot(plan?.days?.[day.key]?.[slot]);
+      const recipe = slotValue.recipeId ? recipeIndex.get(slotValue.recipeId) || null : null;
+
+      return {
+        dayKey: day.key,
+        dayLabel: day.label,
+        slot,
+        slotLabel,
+        slotValue,
+        recipe,
+      };
+    }),
+  );
+}
+
+function findPreferredSlot(plan, weekDays, lens, currentSelection) {
+  if (currentSelection && plan?.days?.[currentSelection.dayKey]?.[currentSelection.slot]) {
+    const currentValue = normalizeMealSlot(plan.days[currentSelection.dayKey][currentSelection.slot]);
+    if (slotMatchesLens(currentValue, currentSelection.slot, lens)) {
+      return currentSelection;
+    }
+  }
+
+  const ordered = flattenPlanSlots(plan, weekDays, new Map());
+  const matching = ordered.find((entry) => slotMatchesLens(entry.slotValue, entry.slot, lens));
+
+  if (matching) {
+    return { dayKey: matching.dayKey, slot: matching.slot };
+  }
+
+  const firstOpen = ordered.find((entry) => entry.slotValue.required && !entry.slotValue.recipeId);
+  if (firstOpen) {
+    return { dayKey: firstOpen.dayKey, slot: firstOpen.slot };
+  }
+
+  const firstSlot = ordered[0];
+  return firstSlot ? { dayKey: firstSlot.dayKey, slot: firstSlot.slot } : null;
+}
+
+function slotMatchesLens(slotValue, slot, lens) {
+  const normalized = normalizeMealSlot(slotValue);
+
+  if (lens === "dinnerOpen") {
+    return slot === "dinner" && normalized.required && !normalized.recipeId;
+  }
+
+  if (lens === "notNeeded") {
+    return !normalized.required;
+  }
+
+  if (lens === "assigned") {
+    return normalized.required && Boolean(normalized.recipeId);
+  }
+
+  return normalized.required && !normalized.recipeId;
+}
+
+function getLensHeading(lens) {
+  if (lens === "dinnerOpen") {
+    return "Dinner gaps first";
+  }
+
+  if (lens === "notNeeded") {
+    return "Intentional skips";
+  }
+
+  if (lens === "assigned") {
+    return "Recipes already in play";
+  }
+
+  return "Open planning decisions";
+}
+
+function getLensCopy(lens) {
+  if (lens === "dinnerOpen") {
+    return "Dinner usually anchors the week, so unresolved dinner slots are highlighted first.";
+  }
+
+  if (lens === "notNeeded") {
+    return "These slots are covered elsewhere and excluded from the shopping list.";
+  }
+
+  if (lens === "assigned") {
+    return "Assigned slots stay visible so repeated recipes and balance across the week are easy to spot.";
+  }
+
+  return "Every open slot is visible on the board. Select one to assign a recipe or mark it as not needed.";
+}
+
+function createApplyDaysState(weekDays, excludedDayKey, predicate = () => false) {
+  return Object.fromEntries(
+    weekDays.map((day, index) => [day.key, day.key === excludedDayKey ? false : Boolean(predicate(day, index))]),
+  );
+}
+
+function createExpandedDaysState(weekDays, preferredDayKey = weekDays[0]?.key || null) {
+  return Object.fromEntries(weekDays.map((day) => [day.key, day.key === preferredDayKey]));
+}
+
+function mergeExpandedDaysState(current, weekDays, preferredDayKey = null) {
+  const next = Object.fromEntries(weekDays.map((day) => [day.key, Boolean(current?.[day.key])]));
+
+  if (preferredDayKey && Object.hasOwn(next, preferredDayKey)) {
+    next[preferredDayKey] = true;
+    return next;
+  }
+
+  if (Object.values(next).some(Boolean)) {
+    return next;
+  }
+
+  if (weekDays[0]) {
+    next[weekDays[0].key] = true;
+  }
+
+  return next;
+}
+
+function groupRecipesForInspector(recipes, slot, search) {
+  const visible = recipes.filter((recipe) => matchesRecipeSearch(recipe, search));
+  return {
+    matches: visible.filter((recipe) => recipeMatchesSlot(recipe, slot)),
+  };
+}
+
+function listUpcomingCookItems(plan, weekDays, recipeIndex, startDayKey) {
+  const flattened = flattenPlanSlots(plan, weekDays, recipeIndex)
+    .filter((entry) => !entry.slotValue.required || entry.recipe)
+    .sort((left, right) => {
+      const leftOrder = weekDays.findIndex((day) => day.key === left.dayKey) * mealSlotKeys.length + mealSlotKeys.indexOf(left.slot);
+      const rightOrder = weekDays.findIndex((day) => day.key === right.dayKey) * mealSlotKeys.length + mealSlotKeys.indexOf(right.slot);
+      return leftOrder - rightOrder;
+    });
+
+  const startIndex = flattened.findIndex((entry) => entry.dayKey >= startDayKey);
+  return startIndex >= 0 ? flattened.slice(startIndex) : flattened;
+}
+
+function getSlotTone(slotValue) {
+  const normalized = normalizeMealSlot(slotValue);
+
+  if (!normalized.required) {
+    return "not-needed";
+  }
+
+  if (normalized.recipeId) {
+    return "assigned";
+  }
+
+  return "open";
+}
+
+function getRecipeMeta(recipe) {
+  const details = [];
+
+  if (recipe.mealTypes?.length) {
+    details.push(recipe.mealTypes[0]);
+  }
+
+  if (recipe.prepTimeMinutes) {
+    details.push(`${recipe.prepTimeMinutes} min prep`);
+  }
+
+  if (recipe.ingredients?.length) {
+    details.push(`${recipe.ingredients.length} ingredients`);
+  }
+
+  return details.join(" · ") || "Saved recipe";
 }
 
 function formatWeekHeading(weekStart) {
@@ -1627,12 +2373,19 @@ function formatTodayHeading(isoDate) {
   return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(date);
 }
 
+function formatLongDayLabel(isoDate) {
+  const date = parseIsoDate(isoDate);
+  return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(date);
+}
+
 function buildFallbackShoppingList(plan, recipeIndex) {
   const grouped = new Map();
   const recipeTitles = new Set();
 
   for (const dayPlan of Object.values(plan?.days || {})) {
-    for (const recipeId of Object.values(dayPlan || {})) {
+    for (const slotValue of Object.values(dayPlan || {})) {
+      const recipeId = getMealSlotRecipeId(slotValue);
+
       if (!recipeId) {
         continue;
       }
@@ -1679,6 +2432,7 @@ function buildFallbackShoppingList(plan, recipeIndex) {
         displayName: entry.displayName,
         quantityLabel: entry.quantityLabel,
         recipes: Array.from(entry.recipes).sort((left, right) => left.localeCompare(right)),
+        category: entry.category,
       }))
       .sort((left, right) => left.displayName.localeCompare(right.displayName)),
     uncategorized: [],
@@ -1701,6 +2455,47 @@ function groupShoppingItemsByCategory(items) {
       items: groupedItems.sort((left, right) => left.displayName.localeCompare(right.displayName)),
     }))
     .sort((left, right) => left.category.localeCompare(right.category));
+}
+
+function createEmptyDayPlan() {
+  return Object.fromEntries(mealSlotKeys.map((slot) => [slot, { recipeId: null, required: true }]));
+}
+
+function normalizeMealSlot(slotValue) {
+  if (slotValue && typeof slotValue === "object" && !Array.isArray(slotValue)) {
+    return {
+      recipeId: typeof slotValue.recipeId === "string" ? slotValue.recipeId : null,
+      required: slotValue.required !== false,
+    };
+  }
+
+  return {
+    recipeId: typeof slotValue === "string" ? slotValue : null,
+    required: true,
+  };
+}
+
+function getMealSlotRecipeId(slotValue) {
+  const normalized = normalizeMealSlot(slotValue);
+  return normalized.required ? normalized.recipeId : null;
+}
+
+function isMealSlotCovered(slotValue) {
+  const normalized = normalizeMealSlot(slotValue);
+  return !normalized.required || Boolean(normalized.recipeId);
+}
+
+function recipeMatchesSlot(recipe, slot) {
+  const preferredTypes = {
+    breakfast: ["breakfast"],
+    snackAm: ["snack"],
+    lunch: ["lunch"],
+    snackPm: ["snack"],
+    dinner: ["dinner"],
+    dessert: ["dessert"],
+  };
+
+  return preferredTypes[slot]?.some((mealType) => recipe.mealTypes.includes(mealType)) || false;
 }
 
 function getWeekStartMonday(date) {
@@ -1737,6 +2532,6 @@ function textAreaToList(value) {
 }
 
 function toOptionalNumber(value) {
-  const input = String(value || "").trim();
-  return input ? Number(input) : null;
+  const stringValue = String(value || "").trim();
+  return stringValue ? Number(stringValue) : null;
 }

@@ -5,7 +5,9 @@ export function buildShoppingList(plan, recipes) {
   const usedRecipes = [];
 
   for (const [day, dayPlan] of Object.entries(plan?.days || {})) {
-    for (const [slot, recipeId] of Object.entries(dayPlan || {})) {
+    for (const [slot, slotValue] of Object.entries(dayPlan || {})) {
+      const recipeId = getRecipeId(slotValue);
+
       if (!recipeId) {
         continue;
       }
@@ -35,4 +37,16 @@ export function buildShoppingList(plan, recipes) {
     items: aggregated.items,
     uncategorized: aggregated.uncategorized,
   };
+}
+
+function getRecipeId(slotValue) {
+  if (slotValue && typeof slotValue === "object" && !Array.isArray(slotValue)) {
+    if (slotValue.required === false) {
+      return null;
+    }
+
+    return typeof slotValue.recipeId === "string" ? slotValue.recipeId : null;
+  }
+
+  return typeof slotValue === "string" ? slotValue : null;
 }
